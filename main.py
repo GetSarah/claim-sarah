@@ -10,12 +10,12 @@ import json
 # Initialize FastAPI
 app = FastAPI()
 
-# Initialize OpenAI (Set your API key in environment variables)
-# export OPENAI_API_KEY="sk-..."
+# Initialize OpenAI
+# Railway injects the API Key automatically from Variables
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # ------------------------
-# DATA MODELS (Strict Output)
+# DATA MODELS
 # ------------------------
 class LineItem(BaseModel):
     description: str
@@ -42,16 +42,15 @@ class ClaimData(BaseModel):
 # ------------------------
 def extract_text_from_pdf(binary: bytes) -> str:
     """
-    Converts PDF bytes to images, preprocesses them for better contrast,
-    and runs Tesseract OCR.
+    Converts PDF bytes to images and runs Tesseract OCR.
     """
     text_chunks = []
     try:
-        # Convert PDF to images (300 DPI is standard for OCR)
+        # Convert PDF to images (300 DPI)
         images = convert_from_bytes(binary, dpi=300)
         
         for i, img in enumerate(images):
-            # Optional: Convert to grayscale for better OCR accuracy
+            # Optimize image for OCR (Grayscale)
             img = img.convert('L') 
             
             # Extract text
@@ -61,18 +60,20 @@ def extract_text_from_pdf(binary: bytes) -> str:
         return "\n".join(text_chunks)
     except Exception as e:
         print(f"OCR Error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to process PDF file. Ensure Poppler is installed.")
+        # Return partial text if possible, or raise error
+        if text_chunks:
+            return "\n".join(text_chunks)
+        raise HTTPException(status_code=500, detail="Failed to process PDF file.")
 
 # ------------------------
-# HELPER: AI EXTRACTION
+# HELPER: AI EXTRACTION (NUCLEAR PROMPT)
 # ------------------------
 def analyze_with_llm(raw_text: str) -> ClaimData:
     """
-    Sends raw OCR text to GPT-4o with strict rules for distinguishing 
-    Category Totals vs. Grand Totals.
+    Sends raw OCR text to GPT-4o with strict rules for parsing.
     """
     
-system_prompt = """
+    system_prompt = """
     You are ClaimSarah, an expert roofing insurance adjuster AI. 
     You are processing OCR text from an insurance estimate (Xactimate/Symbility).
 
@@ -114,6 +115,7 @@ system_prompt = """
     )
 
     return response.choices[0].message.parsed
+
 # ------------------------
 # API ENDPOINT
 # ------------------------
@@ -128,8 +130,6 @@ async def parse_estimate(request: Request):
     raw_text = extract_text_from_pdf(binary)
     
     # 3. AI Processing (The "Brain")
-    # We use AI because insurance formats vary wildly (Farmers vs Allstate vs State Farm).
-    # Regex is too brittle for production.
     parsed_data = analyze_with_llm(raw_text)
 
     # 4. Return JSON
